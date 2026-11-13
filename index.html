@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>설야의 온기: 선물 배송 프로토타입</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0f172a; /* Slate 900 */
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: white;
+            user-select: none;
+        }
+        #game-container {
+            position: relative;
+            width: 1024px;
+            height: 768px;
+            background-color: #1e293b; /* Slate 800 */
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.3);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        /* Custom UI Styling */
+        .gauge-container {
+            width: 200px;
+            height: 16px;
+            background-color: rgba(0, 0, 0, 0.5);
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .gauge-fill {
+            height: 100%;
+            transition: width 0.1s linear;
+        }
+        #toast {
+            position: absolute;
+            bottom: 40px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: #fbbf24;
+            padding: 12px 24px;
+            border-radius: 999px;
+            font-weight: 600;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+            border: 1px solid #fbbf24;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas" width="1024" height="768"></canvas>
+    
+    <!-- UI Overlay -->
+    <div class="absolute top-4 left-4 p-4 bg-slate-900/80 rounded-xl backdrop-blur-sm border border-slate-700 pointer-events-none flex flex-col gap-3">
+        <!-- Stamina -->
+        <div>
+            <div class="flex justify-between text-sm mb-1 font-semibold text-blue-300">
+                <span>스태미나 (Stamina)</span>
+                <span id="ui-stamina-val">90/90</span>
+            </div>
+            <div class="gauge-container">
+                <div id="ui-stamina-bar" class="gauge-fill bg-blue-500" style="width: 100%;"></div>
+            </div>
+        </div>
+        
+        <!-- Noise -->
+        <div>
+            <div class="flex justify-between text-sm mb-1 font-semibold text-red-300">
+                <span>소음 게이지 (Noise)</span>
+                <span id="ui-noise-val">0/100</span>
+            </div>
+            <div class="gauge-container bg-white/20">
+                <div id="ui-noise-bar" class="gauge-fill bg-red-500" style="width: 0%;"></div>
+            </div>
+        </div>
+
+        <!-- Timer & Deliveries -->
+        <div class="flex justify-between items-center mt-2 pt-2 border-t border-slate-700">
+            <div class="text-lg font-bold text-amber-400">
+                남은 시간: <span id="ui-timer">60</span>s
+            </div>
+            <div class="text-lg font-bold text-emerald-400">
+                배송: <span id="ui-deliveries">0</span>/3
+            </div>
+        </div>
+        
+        <!-- Current State Info -->
+        <div class="mt-1 text-xs text-slate-400">
+            상태: <span id="ui-state" class="font-bold text-white">대기</span>
+        </div>
+    </div>
+
+    <!-- Controls Help (Bottom Right) -->
+    <div class="absolute bottom-4 right-4 p-4 bg-slate-900/80 rounded-xl backdrop-blur-sm border border-slate-700 pointer-events-none text-xs text-slate-300 flex flex-col gap-1 text-right">
+        <div><kbd class="bg-slate-700 px-1 rounded">WASD</kbd> 이동 (기본 달리기)</div>
+        <div><kbd class="bg-slate-700 px-1 rounded">Shift</kbd> 대시 (누름 유지)</div>
+        <div><kbd class="bg-slate-700 px-1 rounded">Ctrl</kbd> 걷기 토글</div>
+        <div><kbd class="bg-slate-700 px-1 rounded">F</kbd> 배송하기</div>
+        <div><kbd class="bg-slate-700 px-1 rounded">Space</kbd> 특수 기술 (불가)</div>
+        <div><kbd class="bg-slate-700 px-1 rounded">P</kbd> 도전 포기</div>
+    </div>
+
+    <!-- Toast Message -->
+    <div id="toast">지금은 사용할 수 없습니다.</div>
+
+    <!-- Custom Message Box (Overrides alert/confirm) -->
+    <div id="msgBox" class="hidden absolute inset-0 bg-slate-950/80 flex items-center justify-center z-50 backdrop-blur-sm">
+        <div class="bg-slate-800 p-8 rounded-2xl border border-slate-600 text-center max-w-md shadow-2xl transform scale-100 transition-transform">
+            <h2 id="msgTitle" class="text-3xl font-bold text-white mb-2">결과</h2>
+            <p id="msgDesc" class="text-slate-300 mb-6">여기에 내용이 들어갑니다.</p>
+            <button onclick="closeMsgBox()" class="px-8 py-3 bg-indigo-500 hover:bg-indigo-400 text-white font-bold rounded-lg transition-colors w-full shadow-lg shadow-indigo-500/30">확인 (다시 시작)</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    /** 
+     * GAME CONFIGURATION & CONSTANTS
+     */
+    const CANVAS_W = 1024;
+    const CANVAS_H = 768;
+    
+    const STAMINA_MAX = 90;
+    const STAMINA_REGEN = 5; // per sec
+    const DASH_INITIAL_COST = 10;
+    const DASH_DRAIN = 15; // per sec
+
+    const NOISE_MAX = 100;
+
+    const SPEED_WALK = 120;
+    const SPEED_RUN = 250;
+    const SPEED_DASH = 450;
+
+    // Movement States
+    const STATE_IDLE = 0;
+    const STATE_WALK = 1;
+    const STATE_RUN = 2;
+    const STATE_DASH = 3;
+
+    const ZONE_DANGER_R = 100;
+    const ZONE_ALERT_R = 200;
+
+    // Noise delta matrix (from prompt)
+    function getNoiseDelta(state, distToCenter) {
+        if (distToCenter <= ZONE_DANGER_R) { // Danger Zone
+            switch(state) {
+                case STATE_IDLE: return -5;
+                case STATE_WALK: return 0;
+                case STATE_RUN: return 15;
+                case STATE_DASH: return 30;
+            }
+        } else if (distToCenter <= ZONE_ALERT_R) { // Alert Zone
+            switch(state) {
+                case STATE_IDLE: return -10;
+                case STATE_WALK: return -5;
+                case STATE_RUN: return 5;
+                case STATE_DASH: return 15;
+            }
+        } else { // Outside Zones
+            return -10; // For all states
+        }
+        return 0;
+    }
+
+    /**
+     * GAME STATE & VARIABLES
+     */
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    let lastTime = 0;
+    let gameActive = false;
+    let timer = 60;
+    
+    // Zzz particles for sleeping enemy
+    let zzzParticles = [];
+
+    // Inputs
+    const keys = {
+        w: false, a: false, s: false, d: false,
+        shift: false, ctrlToggle: false,
+        f: false, f_handled: false
+    };
+
+    let shiftHandled = false; // To prevent multiple -10 deductions on key hold
+
+    const player = {
+        x: 100, y: 650,
+        radius: 12,
+        stamina: STAMINA_MAX,
+        noise: 0,
+        state: STATE_IDLE,
+        pulseTimer: 0
+    };
+
+    const enemyCenters = [
+        { x: 250, y: 250 },
+        { x: 750, y: 250 },
+        { x: 500, y: 600 }
+    ];
+
+    let deliveries = [];
+
+    /**
+     * INITIALIZATION & RESET
+     */
+    function init() {
+        // Setup input listeners
+        window.addEventListener('keydown', (e) => handleKey(e.code, true));
+        window.addEventListener('keyup', (e) => handleKey(e.code, false));
+        resetGame();
+        requestAnimationFrame(gameLoop);
+    }
+
+    function resetGame() {
+        player.x = 100;
+        player.y = 650;
+        player.stamina = STAMINA_MAX;
+        player.noise = 0;
+        player.state = STATE_IDLE;
+        keys.ctrlToggle = false;
+        
+        timer = 60;
+        
+        // Spawn 3 deliveries at specific locations away from center
+        deliveries = [
+            { x: 150, y: 600, collected: false },
+            { x: 850, y: 150, collected: false },
+            { x: 850, y: 650, collected: false }
+        ];
+
+        zzzParticles = [];
+        
+        updateUI();
+        gameActive = true;
+        lastTime = performance.now();
+    }
+
+    /**
+     * INPUT HANDLING
+     */
+    function handleKey(code, isDown) {
+        if (!gameActive) return;
+
+        // Prevent default browser scrolling
+        if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(code)) {
+            // Will be handled natively mostly, but just in case
+        }
+
+        switch (code) {
+            case 'KeyW': keys.w = isDown; break;
+            case 'KeyA': keys.a = isDown; break;
+            case 'KeyS': keys.s = isDown; break;
+            case 'KeyD': keys.d = isDown; break;
+            
+            case 'ShiftLeft':
+            case 'ShiftRight':
+                if (isDown && !keys.shift) {
+                    // Initial press cost
+                    if (player.stamina >= DASH_INITIAL_COST) {
+                        player.stamina -= DASH_INITIAL_COST;
+                        keys.shift = true;
+                    }
+                } else if (!isDown) {
+                    keys.shift = false;
+                }
+                break;
+            
+            case 'ControlLeft':
+            case 'ControlRight':
+                if (isDown) {
+                    // Toggle walk mode
+                    keys.ctrlToggle = !keys.ctrlToggle;
+                }
+                break;
+
+            case 'Space':
+                if (isDown) showToast("지금은 사용할 수 없습니다. (스킬 제한)");
+                break;
+            
+            case 'KeyF':
+                keys.f = isDown;
+                if (!isDown) keys.f_handled = false; // Reset handler flag on release
+                break;
+                
+            case 'KeyP':
+                if (isDown) {
+                    gameOver("스테이지 실패! (도전 포기)");
+                }
+                break;
+        }
+    }
+
+    /**
+     * MAIN GAME LOOP
+     */
+    function gameLoop(timestamp) {
+        if (!gameActive) {
+            requestAnimationFrame(gameLoop);
+            return;
+        }
+
+        // Calculate Delta Time in seconds (capped to 0.1s to avoid physics breaking on lag)
+        let dt = (timestamp - lastTime) / 1000;
+        if (dt > 0.1) dt = 0.1;
+        lastTime = timestamp;
+
+        update(dt);
+        draw();
+        updateUI();
+
+        requestAnimationFrame(gameLoop);
+    }
+
+    /**
+     * GAME LOGIC UPDATE
+     */
+    function update(dt) {
+        // 1. Timer Logic
+        timer -= dt;
+        if (timer <= 0) {
+            gameOver("스테이지 실패! (제한 시간 초과)");
+            return;
+        }
+
+        // 2. Movement & State Resolution
+        let dx = 0; let dy = 0;
+        if (keys.w) dy -= 1;
+        if (keys.s) dy += 1;
+        if (keys.a) dx -= 1;
+        if (keys.d) dx += 1;
+
+        let isMoving = (dx !== 0 || dy !== 0);
+        
+        // Normalize movement vector
+        if (isMoving) {
+            const length = Math.sqrt(dx*dx + dy*dy);
+            dx /= length;
+            dy /= length;
+        }
+
+        // Determine current state based on inputs & stamina
+        if (!isMoving) {
+            player.state = STATE_IDLE;
+        } else {
+            if (keys.shift && player.stamina > 0) {
+                player.state = STATE_DASH;
+                player.stamina -= DASH_DRAIN * dt;
+                if (player.stamina < 0) {
+                    player.stamina = 0;
+                    keys.shift = false; // Force shift release logically
+                    player.state = keys.ctrlToggle ? STATE_WALK : STATE_RUN;
+                }
+            } else if (keys.ctrlToggle) {
+                player.state = STATE_WALK;
+            } else {
+                player.state = STATE_RUN;
+            }
+        }
+
+        // Stamina Regen (only if not dashing)
+        if (player.state !== STATE_DASH) {
+            player.stamina += STAMINA_REGEN * dt;
+            if (player.stamina > STAMINA_MAX) player.stamina = STAMINA_MAX;
+        }
+
+        // Apply Movement
+        let speed = 0;
+        if (player.state === STATE_WALK) speed = SPEED_WALK;
+        else if (player.state === STATE_RUN) speed = SPEED_RUN;
+        else if (player.state === STATE_DASH) speed = SPEED_DASH;
+
+        player.x += dx * speed * dt;
+        player.y += dy * speed * dt;
+
+        // Clamp to canvas
+        player.x = Math.max(player.radius, Math.min(CANVAS_W - player.radius, player.x));
+        player.y = Math.max(player.radius, Math.min(CANVAS_H - player.radius, player.y));
+
+        // 3. Noise & Detection Logic
+        let minDistToCenter = Infinity;
+        for (let center of enemyCenters) {
+            const dist = Math.hypot(player.x - center.x, player.y - center.y);
+            if (dist < minDistToCenter) {
+                minDistToCenter = dist;
+            }
+        }
+        
+        const noiseDelta = getNoiseDelta(player.state, minDistToCenter);
+        
+        player.noise += noiseDelta * dt;
+        
+        // Clamp noise
+        if (player.noise < 0) player.noise = 0;
+        
+        if (player.noise >= NOISE_MAX) {
+            player.noise = NOISE_MAX;
+            updateUI(); // force render full bar before alert
+            gameOver("스테이지 실패! (발각됨)");
+            return;
+        }
+
+        // 4. Delivery Interaction
+        let deliveredCount = 0;
+        deliveries.forEach(del => {
+            if (del.collected) {
+                deliveredCount++;
+                return;
+            }
+            
+            // Check interaction (distance)
+            const distToDel = Math.hypot(player.x - del.x, player.y - del.y);
+            if (distToDel < 30) {
+                if (keys.f && !keys.f_handled) {
+                    del.collected = true;
+                    keys.f_handled = true;
+                    showToast("선물 배송 완료!");
+                }
+            }
+        });
+
+        if (deliveredCount === 3) {
+            gameWin();
+            return;
+        }
+
+        // Update visual pulse timer
+        player.pulseTimer += dt;
+        
+        // Zzz Particles logic
+        if (Math.random() < 0.05) { // chance to spawn
+            const randomCenter = enemyCenters[Math.floor(Math.random() * enemyCenters.length)];
+            zzzParticles.push({
+                x: randomCenter.x + (Math.random() * 20 - 10),
+                y: randomCenter.y - 10,
+                life: 0,
+                maxLife: 2 + Math.random()
+            });
+        }
+        for (let i = zzzParticles.length - 1; i >= 0; i--) {
+            let p = zzzParticles[i];
+            p.life += dt;
+            p.y -= 15 * dt; // float up
+            p.x += Math.sin(p.life * 3) * 0.5; // drift
+            if (p.life >= p.maxLife) {
+                zzzParticles.splice(i, 1);
+            }
+        }
+    }
+
+    /**
+     * DRAW LOGIC
+     */
+    function draw() {
+        // Clear background
+        ctx.fillStyle = '#1e293b'; // Slate 800
+        ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+        // Draw Map Grid / Decor (Optional, just to give ground feeling)
+        ctx.strokeStyle = '#334155'; // Slate 700
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for(let i = 0; i < CANVAS_W; i += 64) {
+            ctx.moveTo(i, 0); ctx.lineTo(i, CANVAS_H);
+        }
+        for(let i = 0; i < CANVAS_H; i += 64) {
+            ctx.moveTo(0, i); ctx.lineTo(CANVAS_W, i);
+        }
+        ctx.stroke();
+
+        // Draw Detection Zones
+        enemyCenters.forEach(center => {
+            // Alert Zone
+            ctx.beginPath();
+            ctx.arc(center.x, center.y, ZONE_ALERT_R, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(250, 204, 21, 0.05)'; // Yellow tint
+            ctx.fill();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = 'rgba(250, 204, 21, 0.6)';
+            ctx.setLineDash([10, 10]); // dashed line for boundary
+            ctx.stroke();
+
+            // Danger Zone
+            ctx.beginPath();
+            ctx.arc(center.x, center.y, ZONE_DANGER_R, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(239, 68, 68, 0.1)'; // Red tint
+            ctx.fill();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = 'rgba(239, 68, 68, 0.8)';
+            ctx.setLineDash([]); // solid line
+            ctx.stroke();
+
+            // Draw Enemy (Center)
+            ctx.beginPath();
+            ctx.arc(center.x, center.y, 16, 0, Math.PI * 2);
+            ctx.fillStyle = '#3b82f6'; // Blue for sleeping entity
+            ctx.fill();
+            ctx.strokeStyle = '#1e3a8a';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+        });
+        
+        // Draw Zzz
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+        ctx.font = 'bold 14px Inter';
+        zzzParticles.forEach(p => {
+            const alpha = Math.max(0, 1 - (p.life / p.maxLife));
+            ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+            ctx.fillText("Z", p.x, p.y);
+        });
+
+        // Draw Deliveries
+        deliveries.forEach(del => {
+            if (!del.collected) {
+                // Box glow
+                ctx.shadowColor = '#34d399';
+                ctx.shadowBlur = 15;
+                ctx.fillStyle = '#10b981'; // Emerald
+                ctx.fillRect(del.x - 12, del.y - 12, 24, 24);
+                ctx.shadowBlur = 0; // reset
+                
+                // Box detail
+                ctx.strokeStyle = '#047857';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(del.x - 12, del.y - 12, 24, 24);
+                
+                // Interaction prompt if near
+                const distToDel = Math.hypot(player.x - del.x, player.y - del.y);
+                if (distToDel < 30) {
+                    ctx.fillStyle = 'white';
+                    ctx.font = 'bold 12px Inter';
+                    ctx.textAlign = 'center';
+                    ctx.fillText("[F] 배송", del.x, del.y - 20);
+                    ctx.textAlign = 'left'; // reset
+                }
+            }
+        });
+
+        // Draw Player Pulse (Noise Effect)
+        if (player.state !== STATE_IDLE) {
+            let maxRadius = 0;
+            let pulseSpeed = 1;
+            let color = '255,255,255';
+            let isJagged = false;
+
+            if (player.state === STATE_WALK) {
+                maxRadius = 30;
+                pulseSpeed = 1.5;
+            } else if (player.state === STATE_RUN) {
+                maxRadius = 60;
+                pulseSpeed = 2;
+            } else if (player.state === STATE_DASH) {
+                maxRadius = 100;
+                pulseSpeed = 4;
+                color = '239,68,68'; // Reddish pulse for high noise
+                isJagged = true;
+            }
+
+            const progress = (player.pulseTimer * pulseSpeed) % 1.0;
+            const currentRadius = player.radius + (progress * maxRadius);
+            const alpha = 1 - progress;
+
+            ctx.beginPath();
+            
+            if (isJagged) {
+                // Draw jagged star-like circle
+                const spikes = 12;
+                for (let i = 0; i < spikes * 2; i++) {
+                    const r = currentRadius + (i % 2 === 0 ? 0 : Math.random() * 15 - 5);
+                    const angle = (i / (spikes * 2)) * Math.PI * 2;
+                    const px = player.x + Math.cos(angle) * r;
+                    const py = player.y + Math.sin(angle) * r;
+                    if (i === 0) ctx.moveTo(px, py);
+                    else ctx.lineTo(px, py);
+                }
+                ctx.closePath();
+            } else {
+                ctx.arc(player.x, player.y, currentRadius, 0, Math.PI * 2);
+            }
+            
+            ctx.strokeStyle = `rgba(${color}, ${alpha})`;
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+
+        // Draw Player Character
+        ctx.beginPath();
+        ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+        ctx.fillStyle = '#f8fafc'; // White body
+        ctx.fill();
+        ctx.strokeStyle = '#94a3b8';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Direction indicator (simple line)
+        // We use last known movement direction or derive from keys if moving
+        let lx = 0, ly = 0;
+        if (keys.w) ly -= 1;
+        if (keys.s) ly += 1;
+        if (keys.a) lx -= 1;
+        if (keys.d) lx += 1;
+        if (lx !== 0 || ly !== 0) {
+            const len = Math.hypot(lx, ly);
+            lx = (lx / len) * player.radius * 1.5;
+            ly = (ly / len) * player.radius * 1.5;
+            
+            ctx.beginPath();
+            ctx.moveTo(player.x, player.y);
+            ctx.lineTo(player.x + lx, player.y + ly);
+            ctx.strokeStyle = '#ef4444'; // Red pointer
+            ctx.lineWidth = 3;
+            ctx.stroke();
+        }
+    }
+
+    /**
+     * UI UPDATES
+     */
+    function updateUI() {
+        // Stamina
+        document.getElementById('ui-stamina-val').innerText = `${Math.floor(player.stamina)}/${STAMINA_MAX}`;
+        document.getElementById('ui-stamina-bar').style.width = `${(player.stamina / STAMINA_MAX) * 100}%`;
+        
+        // Noise
+        document.getElementById('ui-noise-val').innerText = `${Math.floor(player.noise)}/${NOISE_MAX}`;
+        const noisePct = (player.noise / NOISE_MAX) * 100;
+        const noiseBar = document.getElementById('ui-noise-bar');
+        noiseBar.style.width = `${noisePct}%`;
+        
+        // Dynamic color for noise
+        if (noisePct > 75) noiseBar.className = "gauge-fill bg-red-600";
+        else if (noisePct > 40) noiseBar.className = "gauge-fill bg-orange-500";
+        else noiseBar.className = "gauge-fill bg-yellow-400";
+
+        // Timer
+        document.getElementById('ui-timer').innerText = Math.ceil(Math.max(0, timer));
+
+        // Deliveries
+        const collected = deliveries.filter(d => d.collected).length;
+        document.getElementById('ui-deliveries').innerText = collected;
+
+        // State Text
+        let stateStr = "대기";
+        let stateColor = "text-slate-300";
+        if (player.state === STATE_WALK) { stateStr = "걷기 (Ctrl)"; stateColor = "text-emerald-300"; }
+        else if (player.state === STATE_RUN) { stateStr = "달리기"; stateColor = "text-sky-300"; }
+        else if (player.state === STATE_DASH) { stateStr = "대시!!"; stateColor = "text-red-400 font-bold"; }
+        
+        const stateEl = document.getElementById('ui-state');
+        stateEl.innerText = stateStr;
+        stateEl.className = `font-bold ${stateColor}`;
+    }
+
+    /**
+     * FEEDBACK & TOAST
+     */
+    let toastTimer = null;
+    function showToast(msg) {
+        const t = document.getElementById('toast');
+        t.innerText = msg;
+        t.style.opacity = 1;
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => {
+            t.style.opacity = 0;
+        }, 2000);
+    }
+
+    /**
+     * CUSTOM MESSAGE BOX (Replaces alert/confirm)
+     */
+    function showMsgBox(title, desc, isWin) {
+        gameActive = false; // Pause game
+        
+        const box = document.getElementById('msgBox');
+        const titleEl = document.getElementById('msgTitle');
+        const descEl = document.getElementById('msgDesc');
+        
+        titleEl.innerText = title;
+        descEl.innerText = desc;
+        
+        if(isWin) {
+            titleEl.className = "text-3xl font-bold text-emerald-400 mb-2";
+        } else {
+            titleEl.className = "text-3xl font-bold text-red-500 mb-2";
+        }
+        
+        box.classList.remove('hidden');
+    }
+
+    function closeMsgBox() {
+        document.getElementById('msgBox').classList.add('hidden');
+        resetGame();
+    }
+
+    function gameWin() {
+        showMsgBox("스테이지 클리어!", "모든 선물을 안전하게 배송했습니다.\n별의 소리를 획득했습니다!", true);
+    }
+
+    function gameOver(reason) {
+        showMsgBox("스테이지 실패", reason + "\n다시 시작합니다.", false);
+    }
+
+    // Start Game
+    init();
+
+</script>
+</body>
+</html>
